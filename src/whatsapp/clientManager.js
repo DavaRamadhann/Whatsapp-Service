@@ -130,9 +130,11 @@ export async function startClient(clientId, options = {}) {
             }
 
             // 2. Siapkan data JSON (sesuai yang dibutuhkan Controller Laravel Anda)
+            // [PERBAIKAN] Kita tambahkan 'sender_name' di sini
             const payload = {
                 from: message.from, // Sesuai dengan validasi 'from'
-                message_body: message.body // Sesuai dengan validasi 'message_body'
+                message_body: message.body, // Sesuai dengan validasi 'message_body'
+                sender_name: message.notifyName || null // Ambil nama profil WA
             };
 
             // 3. Kirim data ke API ROMS (Laravel)
