@@ -61,8 +61,27 @@ export async function startClient(clientId, options = {}) {
   };
 
   const client = new Client({
-    authStrategy: new LocalAuth({ clientId, dataPath: options.dataPath || SESSIONS_DIR || undefined }),
-    puppeteer: puppeteerOpts,
+    authStrategy: new LocalAuth({ 
+        clientId, 
+        dataPath: options.dataPath || SESSIONS_DIR || undefined 
+    }),
+    
+    // Bagian webVersionCache dihapus total agar tidak connect ke GitHub
+    
+    puppeteer: {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ],
+        ...(PUPPETEER_EXEC_PATH ? { executablePath: PUPPETEER_EXEC_PATH } : {}),
+        ...(options.puppeteer || {}),
+    },
   });
 
   const repo = accRepo;
@@ -103,12 +122,35 @@ export async function startClient(clientId, options = {}) {
 
   client.on('disconnected', async (reason) => {
     error(`[${clientId}] Disconnected:`, reason);
-    try {
-      await purgeSession(clientId);
-      log(`[${clientId}] Session purged after disconnect.`);
-    } catch (e) {
-      error(`[${clientId}] Failed to purge after disconnect:`, e && e.message ? e.message : e);
+    
+    // --- PERBAIKAN LOGIKA ---
+    // Daftar alasan "fatal" yang berarti sesi sudah tidak valid
+    // (misal: logout dari HP, atau navigasi puppeteer error)
+    const fatalReasons = ['UNPAIRED', 'LOGGED_OUT', 'NAVIGATION'];
+
+    // Cek apakah 'reason' mengandung salah satu dari alasan fatal
+    if (typeof reason === 'string' && fatalReasons.some(fr => reason.toUpperCase().includes(fr))) {
+        // Ini adalah disconnect permanen. Sesi harus dihapus total.
+        log(`[${clientId}] Fatal disconnect reason: ${reason}. Purging session.`);
+        try {
+            // Kita panggil 'purgeSession' yang asli (menghapus DB row & file)
+            await purgeSession(clientId); //
+            log(`[${clientId}] Session purged successfully after fatal disconnect.`);
+        } catch (e) {
+            error(`[${clientId}] Failed to purge session after fatal disconnect:`, e && e.message ? e.message : e);
+        }
+    } else {
+        // Ini adalah disconnect SEMENTARA (misal: 'Disconnected', 'TIMEOUT', network blip).
+        // Library 'whatsapp-web.js' akan mencoba RECONNECT OTOMATIS.
+        //
+        // JANGAN LAKUKAN APA-APA PADA STATUS DATABASE. Biarkan tetap 'READY'.
+        // Jika kita ubah jadi 'DISCONNECTED', polling frontend akan berhenti dan gagal.
+        //
+        // Cukup hapus klien dari *memori* agar 'startClient' bisa dipanggil ulang jika perlu.
+        clients.delete(clientId);
+        log(`[${clientId}] Temporary disconnect. Client removed from memory. Library will attempt auto-reconnect.`);
     }
+    // --- AKHIR PERBAIKAN ---
   });
 
   client.on('auth_failure', async (msg) => {
